@@ -1,0 +1,7 @@
+openai
+openai # Import OpenAI to interact with the OpenAI API
+python-dotenv # Import dotenv to load environment variables from .env file
+opencc-python-reimplemented # Import opencc-python-reimplemented to convert text from Traditional Chinese to Simplified Chinese
+flask
+flask-cors
+werkzeug

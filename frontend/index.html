@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Transcription Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .title {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            font-size: 1rem;
+            margin-bottom: 40px;
+            line-height: 1.4;
+        }
+
+        .upload-section {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .upload-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px 30px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .upload-button:hover {
+            background: #0056b3;
+        }
+
+        .upload-icon {
+            width: 20px;
+            height: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .files-container {
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            min-height: 120px;
+            display: none;
+        }
+
+        .files-container.has-files {
+            display: block;
+        }
+
+        .file-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .file-preview {
+            width: 60px;
+            height: 60px;
+            background: #6c757d;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .file-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+
+        .audio-icon {
+            width: 30px;
+            height: 30px;
+            fill: white;
+        }
+
+        .file-info {
+            flex-grow: 1;
+        }
+
+        .file-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .file-status {
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .error-message {
+            color: #dc3545;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #28a745;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .remove-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .remove-button:hover {
+            background: #c82333;
+        }
+
+        .download-button {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .download-button:hover {
+            background: #218838;
+        }
+
+        .download-button.show {
+            display: block;
+        }
+
+        .transcribe-button {
+            display: block;
+            width: 200px;
+            margin: 0 auto 30px;
+            padding: 15px 30px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .transcribe-button:hover {
+            background: #218838;
+        }
+
+        .transcribe-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .transcript-container {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .transcript-container.show {
+            display: block;
+        }
+
+        .transcript-item {
+            margin-bottom: 25px;
+        }
+
+        .transcript-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 1.1rem;
+        }
+
+        .transcript-field {
+            width: 100%;
+            height: 200px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            resize: vertical;
+            background: #fafafa;
+        }
+
+        .success-section {
+            text-align: center;
+            padding: 20px;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success-section.show {
+            display: block;
+        }
+
+        .checkmark {
+            width: 50px;
+            height: 50px;
+            background: #28a745;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+
+        .checkmark-icon {
+            width: 24px;
+            height: 24px;
+            fill: white;
+        }
+
+        .success-text {
+            color: #155724;
+            font-size: 1.2rem;
+            font-weight: 500;
+            margin-bottom: 15px;
+        }
+
+        .download-all-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 25px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .download-all-button:hover {
+            background: #0056b3;
+        }
+
+        .download-icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="title">Audio Transcription Tool</h1>
+        <p class="subtitle">Accepted file types: .mp3, .wav, .m4a, .flac, .ogg, .mp4, .mpeg, .mpga, .webm, .m4v, .wma, .aac, .m4b, .m4p, .m4r</p>
+        
+        <div class="upload-section">
+            <button class="upload-button" onclick="document.getElementById('fileInput').click()">
+                <svg class="upload-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                    <path d="M12,11L16,15H13V19H11V15H8L12,11Z" />
+                </svg>
+                Choose Files
+            </button>
+            <input type="file" id="fileInput" class="file-input" multiple 
+                   accept=".mp3,.wav,.m4a,.flac,.ogg,.mp4,.mpeg,.mpga,.webm,.m4v,.wma,.aac,.m4b,.m4p,.m4r">
+        </div>
+
+        <div class="files-container" id="filesContainer">
+            <!-- Files will be dynamically added here -->
+        </div>
+
+        <button class="transcribe-button" id="transcribeButton" onclick="startTranscription()" disabled>
+            Transcribe
+        </button>
+
+        <div class="transcript-container" id="transcriptContainer">
+            <!-- Individual transcript fields will be dynamically added here -->
+        </div>
+
+        <div class="success-section" id="successSection">
+            <div class="checkmark">
+                <svg class="checkmark-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z" />
+                </svg>
+            </div>
+            <div class="success-text">Transcription Complete!</div>
+            <button class="download-all-button" onclick="downloadAllTranscripts()">
+                <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
+                </svg>
+                Download All Transcripts
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:5000';
+        let selectedFiles = [];
+        let transcriptionResults = {};
+        let progressInterval = null;
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            uploadFiles(files);
+        });
+
+        async function uploadFiles(files) {
+            const formData = new FormData();
+            files.forEach(file => {
+                formData.append('files', file);
+            });
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Add uploaded files to selectedFiles array
+                    result.files.forEach(fileInfo => {
+                        selectedFiles.push({
+                            id: fileInfo.id,
+                            filename: fileInfo.filename,
+                            status: 'pending',
+                            progress: 0,
+                            error: null,
+                            transcript: null
+                        });
+                    });
+                    
+                    renderFiles();
+                    updateTranscribeButton();
+                } else {
+                    showError(`Upload failed: ${result.error}`);
+                }
+            } catch (error) {
+                showError(`Upload failed: ${error.message}`);
+            }
+        }
+
+        function renderFiles() {
+            const container = document.getElementById('filesContainer');
+            
+            if (selectedFiles.length === 0) {
+                container.classList.remove('has-files');
+                return;
+            }
+
+            container.classList.add('has-files');
+            container.innerHTML = selectedFiles.map(fileData => {
+                const isVideo = fileData.filename.toLowerCase().match(/\.(mp4|mpeg|mpga|webm|m4v)$/);
+                
+                return `
+                    <div class="file-item" data-id="${fileData.id}">
+                        <div class="file-preview">
+                            ${isVideo ? 
+                                `<svg class="audio-icon" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M8,5.14V19.14L19,12.14L8,5.14Z" />
+                                </svg>` :
+                                `<svg class="audio-icon" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12,3V13.55C11.41,13.21 10.73,13 10,13A3,3 0 0,0 7,16A3,3 0 0,0 10,19A3,3 0 0,0 13,16V7H18V5H12V3Z" />
+                                </svg>`
+                            }
+                        </div>
+                        <div class="file-info">
+                            <div class="file-name">${fileData.filename}</div>
+                            <div class="file-status">${getStatusText(fileData)}</div>
+                            ${fileData.error ? `<div class="error-message">${fileData.error}</div>` : ''}
+                            ${fileData.status === 'transcribing' ? 
+                                `<div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${Math.round(fileData.progress)}%"></div>
+                                </div>` : ''
+                            }
+                            <button class="download-button ${fileData.status === 'completed' ? 'show' : ''}" 
+                                    onclick="downloadTranscript('${fileData.id}')">
+                                Download Transcript
+                            </button>
+                        </div>
+                        <button class="remove-button" onclick="removeFile('${fileData.id}')">×</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getStatusText(fileData) {
+            switch(fileData.status) {
+                case 'pending': return 'Ready to transcribe';
+                case 'transcribing': return `Transcribing... ${Math.round(fileData.progress)}%`;
+                case 'completed': return 'Transcription complete';
+                case 'error': return 'Transcription failed';
+                default: return 'Unknown status';
+            }
+        }
+
+        function removeFile(id) {
+            selectedFiles = selectedFiles.filter(f => f.id != id);
+            delete transcriptionResults[id];
+            renderFiles();
+            updateTranscribeButton();
+            updateTranscriptDisplay();
+        }
+
+        function updateTranscribeButton() {
+            const button = document.getElementById('transcribeButton');
+            button.disabled = selectedFiles.length === 0;
+        }
+
+        async function startTranscription() {
+            const pendingFiles = selectedFiles.filter(f => f.status === 'pending');
+            
+            if (pendingFiles.length === 0) {
+                showError('No files ready for transcription');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/transcribe`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        file_ids: pendingFiles.map(f => f.id)
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Start progress monitoring
+                    startProgressMonitoring();
+                } else {
+                    showError(`Transcription failed: ${result.error}`);
+                }
+            } catch (error) {
+                showError(`Transcription failed: ${error.message}`);
+            }
+        }
+
+        function startProgressMonitoring() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+            
+            progressInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/progress`);
+                    const progressData = await response.json();
+                    
+                    let hasUpdates = false;
+                    
+                    selectedFiles.forEach(fileData => {
+                        if (progressData[fileData.id]) {
+                            const serverData = progressData[fileData.id];
+                            
+                            if (fileData.status !== serverData.status || 
+                                fileData.progress !== serverData.progress ||
+                                fileData.error !== serverData.error) {
+                                
+                                fileData.status = serverData.status;
+                                fileData.progress = serverData.progress || 0;
+                                fileData.error = serverData.error;
+                                fileData.transcript = serverData.transcript;
+                                
+                                hasUpdates = true;
+                            }
+                        }
+                    });
+                    
+                    if (hasUpdates) {
+                        renderFiles();
+                        updateTranscriptDisplay();
+                        checkAllComplete();
+                    }
+                    
+                    // Stop monitoring if all files are complete or have errors
+                    const allFinished = selectedFiles.every(f => 
+                        f.status === 'completed' || f.status === 'error'
+                    );
+                    
+                    if (allFinished) {
+                        clearInterval(progressInterval);
+                        progressInterval = null;
+                        
+                        // Clean up input files
+                        try {
+                            await fetch(`${API_BASE_URL}/cleanup`, { method: 'POST' });
+                        } catch (error) {
+                            console.error('Cleanup failed:', error);
+                        }
+                    }
+                    
+                } catch (error) {
+                    console.error('Progress monitoring failed:', error);
+                }
+            }, 1000); // Check every second
+        }
+
+        function updateTranscriptDisplay() {
+            const transcriptContainer = document.getElementById('transcriptContainer');
+            
+            // Clear existing transcripts
+            transcriptContainer.innerHTML = '';
+            
+            // Add individual transcript fields for each completed file
+            const completedFiles = selectedFiles.filter(f => f.status === 'completed' && f.transcript);
+            
+            if (completedFiles.length > 0) {
+                completedFiles.forEach(fileData => {
+                    const transcriptDiv = document.createElement('div');
+                    transcriptDiv.className = 'transcript-item';
+                    transcriptDiv.innerHTML = `
+                        <div class="transcript-title">${fileData.filename}</div>
+                        <textarea class="transcript-field" readonly>${fileData.transcript}</textarea>
+                    `;
+                    transcriptContainer.appendChild(transcriptDiv);
+                });
+                
+                transcriptContainer.classList.add('show');
+            } else {
+                transcriptContainer.classList.remove('show');
+            }
+        }
+
+        function checkAllComplete() {
+            const allComplete = selectedFiles.length > 0 && 
+                               selectedFiles.every(f => f.status === 'completed' || f.status === 'error');
+            
+            if (allComplete && selectedFiles.some(f => f.status === 'completed')) {
+                document.getElementById('successSection').classList.add('show');
+                
+                // Auto-scroll to the download button
+                setTimeout(() => {
+                    document.getElementById('successSection').scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center' 
+                    });
+                }, 500);
+            }
+        }
+
+        async function downloadTranscript(id) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/download/${id}`);
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = response.headers.get('content-disposition')?.split('filename=')[1] || 'transcript.srt';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } else {
+                    const error = await response.json();
+                    showError(`Download failed: ${error.error}`);
+                }
+            } catch (error) {
+                showError(`Download failed: ${error.message}`);
+            }
+        }
+
+        async function downloadAllTranscripts() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/download-all`);
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'all_transcripts.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } else {
+                    const error = await response.json();
+                    showError(`Download failed: ${error.error}`);
+                }
+            } catch (error) {
+                showError(`Download failed: ${error.message}`);
+            }
+        }
+
+        function showError(message) {
+            // Create a temporary error message
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #dc3545;
+                color: white;
+                padding: 15px 20px;
+                border-radius: 8px;
+                z-index: 1000;
+                max-width: 300px;
+                word-wrap: break-word;
+            `;
+            errorDiv.textContent = message;
+            
+            document.body.appendChild(errorDiv);
+            
+            // Remove after 5 seconds
+            setTimeout(() => {
+                if (errorDiv.parentNode) {
+                    errorDiv.parentNode.removeChild(errorDiv);
+                }
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
