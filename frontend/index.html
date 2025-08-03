@@ -631,13 +631,19 @@
             
             // Show/hide progress bar
             const progressBar = fileItem.querySelector('.progress-bar');
-            if (newStatus === 'transcribing') {
+            if (newStatus === 'transcribing' || newStatus === 'chunking') {
                 if (!progressBar) {
                     const fileInfo = fileItem.querySelector('.file-info');
                     const progressDiv = document.createElement('div');
                     progressDiv.className = 'progress-bar';
                     progressDiv.innerHTML = `<div class="progress-fill" style="width: ${Math.round(newProgress)}%"></div>`;
                     fileInfo.appendChild(progressDiv);
+                } else {
+                    // Update existing progress bar
+                    const progressFill = progressBar.querySelector('.progress-fill');
+                    if (progressFill) {
+                        progressFill.style.width = `${Math.round(newProgress)}%`;
+                    }
                 }
             } else if (progressBar) {
                 progressBar.remove();
@@ -647,6 +653,7 @@
         function getStatusText(fileData) {
             switch(fileData.status) {
                 case 'pending': return 'Ready to transcribe';
+                case 'chunking': return `Processing file (${Math.round(fileData.progress || 0)}% complete)...`;
                 case 'transcribing': return 'Transcribing (this may take a while)...';
                 case 'completed': return 'Transcription complete';
                 case 'error': return 'Transcription failed';
@@ -705,9 +712,15 @@
 
         async function startTranscription() {
             const pendingFiles = selectedFiles.filter(f => f.status === 'pending');
+            const chunkingFiles = selectedFiles.filter(f => f.status === 'chunking');
             
-            if (pendingFiles.length === 0) {
+            if (pendingFiles.length === 0 && chunkingFiles.length === 0) {
                 showError('No files ready for transcription');
+                return;
+            }
+            
+            if (chunkingFiles.length > 0) {
+                showError(`Some files are still being processed (${chunkingFiles.length} files chunking). Please wait for them to complete.`);
                 return;
             }
 

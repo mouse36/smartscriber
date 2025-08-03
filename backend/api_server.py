@@ -261,10 +261,15 @@ def split_large_file(file_path, max_size=CHUNK_SIZE, original_filename=None):
 
 def update_original_file_progress(original_filename):
     """Update progress for the original file based on completed chunks"""
+    print(f"DEBUG: update_original_file_progress called for {original_filename}")
+    
     if original_filename not in original_files:
+        print(f"DEBUG: {original_filename} not found in original_files")
         return
     
     chunks = original_files[original_filename]
+    print(f"DEBUG: Found {len(chunks)} chunks for {original_filename}")
+    
     completed_chunks = sum(1 for chunk_id in chunks if 
                           chunk_id in transcription_progress and 
                           transcription_progress[chunk_id]['status'] == 'completed')
@@ -273,7 +278,7 @@ def update_original_file_progress(original_filename):
                        transcription_progress[chunk_id]['status'] == 'error')
     total_chunks = len(chunks)
     
-    print(f"update_original_file_progress: {original_filename}, completed: {completed_chunks}/{total_chunks}, errors: {error_chunks}")
+    print(f"DEBUG: update_original_file_progress: {original_filename}, completed: {completed_chunks}/{total_chunks}, errors: {error_chunks}")
     
     if total_chunks > 0:
         # Find the original file ID for this original filename
@@ -284,7 +289,7 @@ def update_original_file_progress(original_filename):
                 original_file_id = file_id
                 break
         
-        print(f"Found original file ID: {original_file_id}")
+        print(f"DEBUG: Found original file ID: {original_file_id}")
         
         # If any chunks have errors, mark the original file as error
         if error_chunks > 0:
@@ -300,25 +305,24 @@ def update_original_file_progress(original_filename):
                 transcription_progress[original_file_id]['status'] = 'error'
                 transcription_progress[original_file_id]['error'] = f'Chunk transcription failed: {"; ".join(error_messages)}'
                 transcription_progress[original_file_id]['progress'] = 0
-                print(f"Updated original file {original_file_id} with error: {transcription_progress[original_file_id]['error']}")
+                print(f"DEBUG: Updated original file {original_file_id} with error: {transcription_progress[original_file_id]['error']}")
             return
         
         # Calculate progress percentage
         progress_percentage = (completed_chunks / total_chunks) * 100 if total_chunks > 0 else 0
+        print(f"DEBUG: Calculated progress: {progress_percentage}%")
         
-        # Update status for all chunks of this original file
-        for chunk_id in chunks:
-            if chunk_id in transcription_progress:
-                # If all chunks are complete, mark as completed
-                if completed_chunks == total_chunks:
-                    transcription_progress[chunk_id]['status'] = 'completed'
-
         # Also update the original file's status if we found it
         if original_file_id and original_file_id in transcription_progress:
-            # Only mark as completed when ALL chunks are done
-            transcription_progress[original_file_id]['status'] = 'transcribing' if completed_chunks < total_chunks else 'completed'
-            transcription_progress[original_file_id]['progress'] = progress_percentage
-            print(f"Updated original file {original_file_id}: status={transcription_progress[original_file_id]['status']}, progress={progress_percentage}%")
+            # Update status and progress for the original file
+            if completed_chunks == total_chunks:
+                transcription_progress[original_file_id]['status'] = 'completed'
+                transcription_progress[original_file_id]['progress'] = 100
+            else:
+                transcription_progress[original_file_id]['status'] = 'transcribing'
+                transcription_progress[original_file_id]['progress'] = progress_percentage
+            
+            print(f"DEBUG: Updated original file {original_file_id}: status={transcription_progress[original_file_id]['status']}, progress={progress_percentage}%")
             
             if completed_chunks == total_chunks:
                 # Set the output path for the original file
@@ -329,13 +333,17 @@ def update_original_file_progress(original_filename):
                 # Check if the output file actually exists before marking as completed
                 if os.path.exists(output_path):
                     transcription_progress[original_file_id]['output_path'] = output_path
-                    print(f"Output file exists: {output_path}")
+                    print(f"DEBUG: Output file exists: {output_path}")
                 else:
-                    print(f"WARNING: Output file does not exist yet: {output_path}")
+                    print(f"DEBUG: WARNING: Output file does not exist yet: {output_path}")
                     # Don't mark as completed if the file doesn't exist yet
                     transcription_progress[original_file_id]['status'] = 'transcribing'
                     transcription_progress[original_file_id]['progress'] = 95  # Almost done
                     return
+        else:
+            print(f"DEBUG: Original file ID not found or not in transcription_progress")
+    else:
+        print(f"DEBUG: No chunks found for {original_filename}")
 
 
 def transcribe_file(file_path, file_id):
@@ -376,11 +384,14 @@ def transcribe_file(file_path, file_id):
         # Update progress for original file if this is a chunk
         original_file = transcription_progress[file_id].get('original_file')
         if original_file:
+            print(f"DEBUG: Chunk {file_id} completed, original_file: {original_file}")
             # Write this chunk's transcript to the output file immediately
             write_chunk_to_output(file_id, original_file, simplified_transcript)
             # Update original file progress after chunk completes
+            print(f"DEBUG: Calling update_original_file_progress for {original_file}")
             update_original_file_progress(original_file)
         else:
+            print(f"DEBUG: Single file completed: {file_id}")
             # Single file (not chunked)
             # Use original filename if available, otherwise use file path
             original_filename = transcription_progress[file_id].get('original_filename')
@@ -544,33 +555,55 @@ def upload_files():
                     def chunk_file(file_path, original_filename, file_id):
                         try:
                             print(f"Starting chunking process for {original_filename}")
+                            # Update status to indicate chunking is in progress
+                            transcription_progress[file_id]['status'] = 'chunking'
+                            transcription_progress[file_id]['progress'] = 0
+                            
                             chunk_files = split_large_file(file_path, original_filename=original_filename)
                             original_files[original_filename] = []  # Use the full filename as key
                             
+                            # Update progress to indicate chunking is complete
+                            transcription_progress[file_id]['progress'] = 50  # 50% done with chunking
+                            
                             # Get the total duration of the original file for accurate timing
-                            result = subprocess.run([
-                                'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
-                                '-of', 'csv=p=0', chunk_files[0] if chunk_files else file_path
-                            ], capture_output=True, text=True)
-                            
-                            if result.returncode != 0:
-                                raise Exception(f"Could not determine file duration: {result.stderr}")
-                            
-                            total_duration = float(result.stdout.strip())
-                            print(f"Total file duration: {total_duration}s")
-                            
-                            # Calculate chunk duration based on number of chunks
-                            if len(chunk_files) > 1:
-                                chunk_duration = total_duration / len(chunk_files)
-                                print(f"Chunk duration: {chunk_duration}s")
+                            # We need to calculate the total duration from the original file before it was split
+                            # Since the original file might have been removed, we'll calculate based on chunk count and duration
+                            if chunk_files:
+                                # Get duration of first chunk to estimate individual chunk duration
+                                result = subprocess.run([
+                                    'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                                    '-of', 'csv=p=0', chunk_files[0]
+                                ], capture_output=True, text=True)
+                                
+                                if result.returncode != 0:
+                                    raise Exception(f"Could not determine chunk duration: {result.stderr}")
+                                
+                                chunk_duration = float(result.stdout.strip())
+                                total_duration = chunk_duration * len(chunk_files)
+                                print(f"Estimated total duration: {total_duration}s (from {len(chunk_files)} chunks of ~{chunk_duration}s each)")
                             else:
+                                # Fallback to original file if no chunks
+                                result = subprocess.run([
+                                    'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                                    '-of', 'csv=p=0', file_path
+                                ], capture_output=True, text=True)
+                                
+                                if result.returncode != 0:
+                                    raise Exception(f"Could not determine file duration: {result.stderr}")
+                                
+                                total_duration = float(result.stdout.strip())
                                 chunk_duration = total_duration
-                                print(f"Single file, no chunking needed")
+                                print(f"Total file duration: {total_duration}s")
+                                print(f"Chunk duration: {chunk_duration}s")
                             
                             for i, chunk_path in enumerate(chunk_files):
                                 chunk_filename = os.path.basename(chunk_path)
                                 chunk_id = f"{int(time.time() * 1000)}_{i}_{chunk_filename}"
                                 chunk_start_time = i * chunk_duration
+                                
+                                # Update progress during chunk creation
+                                chunk_progress = (i + 1) / len(chunk_files) * 50  # 0-50% for chunking
+                                transcription_progress[file_id]['progress'] = chunk_progress
                                 
                                 transcription_progress[chunk_id] = {
                                     'status': 'pending',
@@ -584,7 +617,9 @@ def upload_files():
                                     'chunk_start_time': chunk_start_time  # Store the start time of this chunk in the original file
                                 }
                                 original_files[original_filename].append(chunk_id)
-                                print(f"Created chunk entry: {chunk_id} with start time: {chunk_start_time:.1f}s")
+                                print(f"DEBUG: Created chunk entry: {chunk_id} with start time: {chunk_start_time:.1f}s for original file: {original_filename}")
+                            
+                            print(f"DEBUG: Total chunks created for {original_filename}: {len(original_files[original_filename])}")
                             
                             # Create empty transcript file immediately when chunking starts
                             base_name = os.path.splitext(original_filename)[0]
@@ -599,7 +634,33 @@ def upload_files():
                             
                             # Update the original file status to indicate chunking is complete
                             transcription_progress[file_id]['status'] = 'pending'
+                            transcription_progress[file_id]['progress'] = 0  # Reset progress for transcription phase
                             print(f"Chunking completed for {original_filename}")
+                            
+                            # Ensure the original_files entry is properly set
+                            if original_filename not in original_files:
+                                original_files[original_filename] = []
+                            
+                            # Verify all chunks exist in the file system
+                            chunk_files_exist = True
+                            for chunk_id in original_files[original_filename]:
+                                chunk_parts = chunk_id.split('_', 2)
+                                if len(chunk_parts) >= 3:
+                                    chunk_filename = chunk_parts[2]
+                                    chunk_path = os.path.join(UPLOAD_FOLDER, chunk_filename)
+                                    if not os.path.exists(chunk_path):
+                                        print(f"WARNING: Chunk file missing: {chunk_path}")
+                                        chunk_files_exist = False
+                                        break
+                            
+                            if chunk_files_exist:
+                                print(f"All chunk files verified for {original_filename}")
+                                # Add a small delay to ensure file system is updated
+                                time.sleep(1)
+                            else:
+                                print(f"ERROR: Some chunk files missing for {original_filename}")
+                                transcription_progress[file_id]['status'] = 'error'
+                                transcription_progress[file_id]['error'] = 'Chunking failed - some chunk files are missing'
                             
                             # Remove the original file after chunks are successfully created
                             if os.path.exists(file_path):
@@ -668,6 +729,11 @@ def start_transcription():
                     print(f"File {file_id} has error: {file_info['error']}")
                     continue
                 
+                # Skip files that are still chunking
+                if file_info['status'] == 'chunking':
+                    print(f"File {file_id} is still chunking, skipping for now")
+                    continue
+                
                 if file_info['status'] == 'pending':
                     # Check if this is an original file that needs chunking
                     if file_info.get('is_original'):
@@ -675,15 +741,17 @@ def start_transcription():
                         print(f"File {file_id} is original file, processing chunks for: {original_filename}")
                         
                         # Wait a bit for chunking to complete if it's still in progress
-                        max_wait = 30  # Wait up to 30 seconds for chunking
+                        max_wait = 120  # Wait up to 120 seconds for chunking (increased for large files)
                         wait_count = 0
                         while original_filename not in original_files and wait_count < max_wait:
-                            print(f"Waiting for chunking to complete for {original_filename}...")
+                            print(f"Waiting for chunking to complete for {original_filename}... ({wait_count}/{max_wait}s)")
                             time.sleep(1)
                             wait_count += 1
                         
                         if original_filename in original_files:
                             print(f"Found chunks for {original_filename}: {original_files[original_filename]}")
+                            # Add a small delay to ensure chunking is fully complete
+                            time.sleep(2)
                             # Transcribe all chunks for this original file
                             for chunk_id in original_files[original_filename]:
                                 if chunk_id in transcription_progress:
@@ -692,21 +760,47 @@ def start_transcription():
                                         # Find the chunk file by matching the chunk_id pattern
                                         # Look for files that contain the chunk_id in their name
                                         chunk_file_found = False
+                                        print(f"DEBUG: Looking for chunk file for {chunk_id}")
+                                        print(f"DEBUG: Available files in {UPLOAD_FOLDER}: {os.listdir(UPLOAD_FOLDER)}")
+                                        
                                         for filename in os.listdir(UPLOAD_FOLDER):
-                                            if chunk_id in filename or filename in chunk_id:
-                                                file_path = os.path.join(UPLOAD_FOLDER, filename)
-                                                print(f"Starting transcription for chunk {chunk_id}: {file_path}")
-                                                thread = threading.Thread(
-                                                    target=transcribe_file,
-                                                    args=(file_path, chunk_id)
-                                                )
-                                                thread.start()
-                                                threads.append(thread)
-                                                chunk_file_found = True
-                                                break
+                                            # Extract the chunk filename from chunk_id (format: timestamp_index_chunkname)
+                                            chunk_parts = chunk_id.split('_', 2)
+                                            if len(chunk_parts) >= 3:
+                                                chunk_filename = chunk_parts[2]  # Get the actual chunk filename
+                                                print(f"DEBUG: Comparing '{filename}' with expected chunk filename '{chunk_filename}'")
+                                                if filename == chunk_filename:
+                                                    file_path = os.path.join(UPLOAD_FOLDER, filename)
+                                                    print(f"Starting transcription for chunk {chunk_id}: {file_path}")
+                                                    thread = threading.Thread(
+                                                        target=transcribe_file,
+                                                        args=(file_path, chunk_id)
+                                                    )
+                                                    thread.start()
+                                                    threads.append(thread)
+                                                    chunk_file_found = True
+                                                    break
+                                            else:
+                                                # Fallback: try to match by chunk index if the filename format is different
+                                                chunk_parts = chunk_id.split('_', 2)
+                                                if len(chunk_parts) >= 2:
+                                                    chunk_index = chunk_parts[1]
+                                                    # Look for files that contain the chunk index
+                                                    if f"chunk_{chunk_index}" in filename:
+                                                        file_path = os.path.join(UPLOAD_FOLDER, filename)
+                                                        print(f"Starting transcription for chunk {chunk_id} (matched by index): {file_path}")
+                                                        thread = threading.Thread(
+                                                            target=transcribe_file,
+                                                            args=(file_path, chunk_id)
+                                                        )
+                                                        thread.start()
+                                                        threads.append(thread)
+                                                        chunk_file_found = True
+                                                        break
                                         
                                         if not chunk_file_found:
                                             print(f"Chunk file not found for {chunk_id}")
+                                            print(f"DEBUG: Expected chunk filename: {chunk_parts[2] if len(chunk_parts) >= 3 else 'unknown'}")
                                             # Mark chunk as error if file doesn't exist
                                             transcription_progress[chunk_id]['status'] = 'error'
                                             transcription_progress[chunk_id]['error'] = f'Chunk file not found for {chunk_id}'
@@ -731,6 +825,14 @@ def start_transcription():
                                 break
 
         print(f"Started {len(threads)} transcription threads")
+        
+        # If no threads were started (all files were chunking), return a message
+        if len(threads) == 0:
+            return jsonify({
+                'message': 'No files ready for transcription (some files may still be processing)',
+                'file_ids': file_ids
+            })
+        
         return jsonify({
             'message': f'Started transcription for {len(threads)} files',
             'file_ids': file_ids
