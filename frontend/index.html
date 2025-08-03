@@ -111,6 +111,21 @@
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            position: relative;
+        }
+
+        .file-size {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #007bff;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 500;
+            padding: 2px 6px;
+            border-radius: 10px;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
 
         .file-preview img {
@@ -261,6 +276,12 @@
             background: #fafafa;
         }
 
+        .transcript-field.error-field {
+            border-color: #dc3545;
+            background-color: #fff3f3;
+            color: #721c24;
+        }
+
         .success-section {
             text-align: center;
             padding: 20px;
@@ -297,6 +318,59 @@
             font-size: 1.2rem;
             font-weight: 500;
             margin-bottom: 15px;
+        }
+
+        .error-summary {
+            color: #dc3545;
+            font-size: 0.95rem;
+            margin-bottom: 15px;
+            text-align: left;
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+
+        .backend-error {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #dc3545;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            font-weight: 500;
+            z-index: 1000;
+            display: none;
+        }
+
+        .backend-error.show {
+            display: block;
+        }
+
+        .testing-mode-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 10px;
+            text-align: center;
+            font-weight: 500;
+            z-index: 999;
+            display: none;
+        }
+
+        .testing-mode-banner.show {
+            display: block;
+        }
+
+        .testing-mode-banner.testing {
+            background: #28a745;
+            color: white;
+        }
+
+        .testing-mode-banner.production {
+            background: #ffc107;
+            color: black;
         }
 
         .download-all-button {
@@ -340,6 +414,14 @@
     </style>
 </head>
 <body>
+    <div class="backend-error" id="backendError">
+        ⚠️ Backend server is not running. Please start the backend server to use this application.
+    </div>
+    
+    <div class="testing-mode-banner" id="testingModeBanner">
+        🧪 Testing Mode: Whisper API is disabled for free development testing
+    </div>
+    
     <div class="container">
         <h1 class="title">Audio Transcription Tool</h1>
         <p class="subtitle">Accepted file types: .mp3, .wav, .m4a, .flac, .ogg, .mp4, .mpeg, .mpga, .webm, .m4v, .wma, .aac, .m4b, .m4p, .m4r</p>
@@ -375,6 +457,7 @@
                 </svg>
             </div>
             <div class="success-text">Transcription Complete!</div>
+            <div class="error-summary" id="errorSummary"></div>
             <button class="download-all-button" onclick="downloadAllTranscripts()">
                 <svg class="download-icon" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
@@ -389,7 +472,30 @@
         let selectedFiles = [];
         let transcriptionResults = {};
         let progressInterval = null;
+        let missingFilesTracker = {}; // Track files that are missing from progress data
+        let backendCheckInterval = null; // Track backend connectivity
+        let wakeLock = null; // Prevent screen sleep during transcription
 
+        // Check backend connectivity on page load
+        checkBackendConnectivity();
+        
+        // Check testing mode status on page load
+        checkTestingMode();
+        
+        // Set up periodic backend connectivity checks
+        backendCheckInterval = setInterval(checkBackendConnectivity, 5000); // Check every 5 seconds
+        
+        // Handle page visibility changes to manage wake lock
+        document.addEventListener('visibilitychange', async () => {
+            if (document.hidden) {
+                // Page is hidden, release wake lock
+                await releaseWakeLock();
+            } else if (selectedFiles.some(f => f.status === 'transcribing')) {
+                // Page is visible again and transcription is still in progress, request wake lock
+                await requestWakeLock();
+            }
+        });
+        
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const files = Array.from(e.target.files);
             uploadFiles(files);
@@ -412,18 +518,21 @@
                 if (response.ok) {
                     // Add uploaded files to selectedFiles array
                     result.files.forEach(fileInfo => {
-                        selectedFiles.push({
-                            id: fileInfo.id,
-                            filename: fileInfo.filename,
-                            status: 'pending',
-                            progress: 0,
-                            error: null,
-                            transcript: null
-                        });
+                    selectedFiles.push({
+                        id: fileInfo.id,
+                        filename: fileInfo.filename,
+                        size: fileInfo.size, // Add file size
+                        status: 'pending',
+                        error: null,
+                        transcript: null,
+                        // Initialize previous values to prevent unnecessary updates
+                        previousStatus: 'pending',
+                        previousError: null
                     });
+            });
                     
-                    renderFiles();
-                    updateTranscribeButton();
+            renderFiles();
+            updateTranscribeButton();
                 } else {
                     showError(`Upload failed: ${result.error}`);
                 }
@@ -455,6 +564,7 @@
                                     <path d="M12,3V13.55C11.41,13.21 10.73,13 10,13A3,3 0 0,0 7,16A3,3 0 0,0 10,19A3,3 0 0,0 13,16V7H18V5H12V3Z" />
                                 </svg>`
                             }
+                            <span class="file-size">${formatBytes(fileData.size)}</span>
                         </div>
                         <div class="file-info">
                             <div class="file-name">${fileData.filename}</div>
@@ -462,7 +572,7 @@
                             ${fileData.error ? `<div class="error-message">${fileData.error}</div>` : ''}
                             ${fileData.status === 'transcribing' ? 
                                 `<div class="progress-bar">
-                                    <div class="progress-fill" style="width: ${Math.round(fileData.progress)}%"></div>
+                                    <div class="progress-fill" style="width: ${Math.round(calculateFileProgress(fileData))}%"></div>
                                 </div>` : ''
                             }
                             <button class="download-button ${fileData.status === 'completed' ? 'show' : ''}" 
@@ -476,22 +586,116 @@
             }).join('');
         }
 
+        function updateFileProgress(fileId, newProgress, newStatus, newError) {
+            const fileItem = document.querySelector(`[data-id="${fileId}"]`);
+            if (!fileItem) return;
+            
+            // Update progress bar if it exists
+            const progressFill = fileItem.querySelector('.progress-fill');
+            if (progressFill && newStatus === 'transcribing') {
+                progressFill.style.width = `${Math.round(newProgress)}%`;
+            }
+            
+            // Update status text
+            const statusElement = fileItem.querySelector('.file-status');
+            if (statusElement) {
+                statusElement.textContent = getStatusText({ status: newStatus });
+            }
+            
+            // Update error message
+            const errorElement = fileItem.querySelector('.error-message');
+            if (newError) {
+                if (errorElement) {
+                    errorElement.textContent = newError;
+                } else {
+                    // Create error element if it doesn't exist
+                    const fileInfo = fileItem.querySelector('.file-info');
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'error-message';
+                    errorDiv.textContent = newError;
+                    fileInfo.appendChild(errorDiv);
+                }
+            } else if (errorElement) {
+                errorElement.remove();
+            }
+            
+            // Update download button visibility
+            const downloadButton = fileItem.querySelector('.download-button');
+            if (downloadButton) {
+                if (newStatus === 'completed') {
+                    downloadButton.classList.add('show');
+                } else {
+                    downloadButton.classList.remove('show');
+                }
+            }
+            
+            // Show/hide progress bar
+            const progressBar = fileItem.querySelector('.progress-bar');
+            if (newStatus === 'transcribing') {
+                if (!progressBar) {
+                    const fileInfo = fileItem.querySelector('.file-info');
+                    const progressDiv = document.createElement('div');
+                    progressDiv.className = 'progress-bar';
+                    progressDiv.innerHTML = `<div class="progress-fill" style="width: ${Math.round(newProgress)}%"></div>`;
+                    fileInfo.appendChild(progressDiv);
+                }
+            } else if (progressBar) {
+                progressBar.remove();
+            }
+        }
+
         function getStatusText(fileData) {
             switch(fileData.status) {
                 case 'pending': return 'Ready to transcribe';
-                case 'transcribing': return `Transcribing... ${Math.round(fileData.progress)}%`;
+                case 'transcribing': return 'Transcribing (this may take a while)...';
                 case 'completed': return 'Transcription complete';
                 case 'error': return 'Transcription failed';
                 default: return 'Unknown status';
             }
         }
 
-        function removeFile(id) {
-            selectedFiles = selectedFiles.filter(f => f.id != id);
-            delete transcriptionResults[id];
-            renderFiles();
-            updateTranscribeButton();
-            updateTranscriptDisplay();
+        async function removeFile(id) {
+            try {
+                // Call backend to remove file and stop transcription
+                const response = await fetch(`${API_BASE_URL}/remove-file/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    // Remove from local tracking
+                    selectedFiles = selectedFiles.filter(f => f.id != id);
+                    delete transcriptionResults[id];
+                    delete missingFilesTracker[id];
+                    
+                    // Stop smooth progress for this file
+                    // stopSmoothProgress(id); // Removed smooth progress
+                    
+                    // Update UI
+                    renderFiles();
+                    updateTranscribeButton();
+                    updateTranscriptDisplay();
+                    
+                    // If no files left, stop progress monitoring
+                    if (selectedFiles.length === 0 && progressInterval) {
+                        clearInterval(progressInterval);
+                        progressInterval = null;
+                        
+                        // Release wake lock when all files are removed
+                        await releaseWakeLock();
+                        
+                        // Reset transcribe button
+                        const transcribeButton = document.getElementById('transcribeButton');
+                        transcribeButton.disabled = false;
+                        transcribeButton.textContent = 'Transcribe';
+                        transcribeButton.style.opacity = '1';
+                    }
+                } else {
+                    const error = await response.json();
+                    showError(`Failed to remove file: ${error.error}`);
+                }
+            } catch (error) {
+                showError(`Failed to remove file: ${error.message}`);
+            }
         }
 
         function updateTranscribeButton() {
@@ -507,7 +711,27 @@
                 return;
             }
 
+            // Request wake lock to prevent sleep during transcription
+            await requestWakeLock();
+
+            // IMMEDIATELY update UI to show transcription is starting
+            pendingFiles.forEach(file => {
+                file.status = 'transcribing';
+                file.transcriptionStartTime = Date.now();
+            });
+            
+            // Update the display immediately
+            renderFiles();
+            
+            // Disable the transcribe button and change text
+            const transcribeButton = document.getElementById('transcribeButton');
+            transcribeButton.disabled = true;
+            transcribeButton.textContent = 'Transcribing...';
+            transcribeButton.style.opacity = '0.6'; // Make it look disabled
+
             try {
+                console.log('Starting transcription for files:', pendingFiles.map(f => f.id));
+                
                 const response = await fetch(`${API_BASE_URL}/transcribe`, {
                     method: 'POST',
                     headers: {
@@ -521,13 +745,40 @@
                 const result = await response.json();
                 
                 if (response.ok) {
+                    console.log('Transcription started successfully:', result);
                     // Start progress monitoring
                     startProgressMonitoring();
                 } else {
+                    console.error('Transcription failed:', result.error);
                     showError(`Transcription failed: ${result.error}`);
+                    
+                    // Reset UI on error
+                    pendingFiles.forEach(file => {
+                        file.status = 'pending';
+                        file.progress = 0;
+                    });
+                    renderFiles();
+                    
+                    // Re-enable button
+                    transcribeButton.disabled = false;
+                    transcribeButton.textContent = 'Transcribe';
+                    transcribeButton.style.opacity = '1';
                 }
             } catch (error) {
+                console.error('Transcription request failed:', error);
                 showError(`Transcription failed: ${error.message}`);
+                
+                // Reset UI on error
+                pendingFiles.forEach(file => {
+                    file.status = 'pending';
+                    file.progress = 0;
+                });
+                renderFiles();
+                
+                // Re-enable button
+                transcribeButton.disabled = false;
+                transcribeButton.textContent = 'Transcribe';
+                transcribeButton.style.opacity = '1';
             }
         }
 
@@ -542,39 +793,148 @@
                     const progressData = await response.json();
                     
                     let hasUpdates = false;
+                    let filesRemoved = false;
                     
-                    selectedFiles.forEach(fileData => {
-                        if (progressData[fileData.id]) {
+                    // Check if any files were removed from the server
+                    selectedFiles.forEach((fileData, index) => {
+                        console.log(`Checking file ${fileData.id}: status=${fileData.status}, progress=${fileData.progress}`);
+                        
+                        if (!progressData[fileData.id]) {
+                            // File might be temporarily missing during chunking, track it
+                            if (!missingFilesTracker[fileData.id]) {
+                                missingFilesTracker[fileData.id] = Date.now();
+                            }
+                            
+                            // Only remove if it's been missing for more than 10 seconds
+                            const missingTime = Date.now() - missingFilesTracker[fileData.id];
+                            if (missingTime > 10000) {
+                                console.log(`File ${fileData.id} has been missing for ${missingTime}ms, removing`);
+                                selectedFiles.splice(index, 1);
+                                delete missingFilesTracker[fileData.id];
+                                filesRemoved = true;
+                            } else {
+                                console.log(`File ${fileData.id} not found in progress data, might be chunking (${missingTime}ms)`);
+                            }
+                        } else {
+                            // File found, remove from missing tracker
+                            delete missingFilesTracker[fileData.id];
+                            
                             const serverData = progressData[fileData.id];
+                            console.log(`Server data for ${fileData.id}: status=${serverData.status}, progress=${serverData.progress}`);
                             
                             if (fileData.status !== serverData.status || 
-                                fileData.progress !== serverData.progress ||
-                                fileData.error !== serverData.error) {
+                                fileData.error !== serverData.error ||
+                                fileData.progress !== serverData.progress) {
                                 
+                                console.log(`Updating file ${fileData.id}: status ${fileData.status} -> ${serverData.status}, progress ${fileData.progress} -> ${serverData.progress}`);
                                 fileData.status = serverData.status;
-                                fileData.progress = serverData.progress || 0;
                                 fileData.error = serverData.error;
+                                fileData.progress = serverData.progress;
                                 fileData.transcript = serverData.transcript;
+                                
+                                // For chunked files, track chunks and calculate progress
+                                if (fileData.is_original && serverData.status === 'transcribing') {
+                                    // Initialize chunks tracking if not already done
+                                    if (!fileData.chunks) {
+                                        fileData.chunks = [];
+                                        fileData.transcriptionStartTime = Date.now();
+                                        
+                                        // Find all chunks for this original file
+                                        Object.keys(progressData).forEach(chunkId => {
+                                            const chunkData = progressData[chunkId];
+                                            if (chunkData.original_file === fileData.filename) {
+                                                fileData.chunks.push(chunkId);
+                                            }
+                                        });
+                                    }
+                                    
+                                    // Update chunk statuses
+                                    fileData.chunks.forEach(chunkId => {
+                                        if (progressData[chunkId]) {
+                                            const chunkData = progressData[chunkId];
+                                            let chunkFile = selectedFiles.find(f => f.id === chunkId);
+                                            if (!chunkFile) {
+                                                // Add chunk file to tracking
+                                                selectedFiles.push({
+                                                    id: chunkId,
+                                                    filename: chunkData.original_filename || chunkId,
+                                                    status: chunkData.status,
+                                                    error: chunkData.error,
+                                                    transcript: chunkData.transcript,
+                                                    is_chunk: true,
+                                                    original_file: fileData.id
+                                                });
+                                            } else {
+                                                chunkFile.status = chunkData.status;
+                                                chunkFile.error = chunkData.error;
+                                                chunkFile.transcript = chunkData.transcript;
+                                            }
+                                        }
+                                    });
+                                }
                                 
                                 hasUpdates = true;
                             }
                         }
                     });
                     
-                    if (hasUpdates) {
-                        renderFiles();
+                    if (hasUpdates || filesRemoved) {
+                        // Use targeted updates instead of re-rendering everything
+                        if (hasUpdates) {
+                            // Update only the files that changed
+                            selectedFiles.forEach(fileData => {
+                                if (fileData.status !== fileData.previousStatus || 
+                                    fileData.error !== fileData.previousError) {
+                                    
+                                    updateFileProgress(fileData.id, calculateFileProgress(fileData), fileData.status, fileData.error);
+                                    
+                                    // Store current values as previous for next comparison
+                                    fileData.previousStatus = fileData.status;
+                                    fileData.previousError = fileData.error;
+                                }
+                            });
+                        }
+                        
+                        if (filesRemoved) {
+                            // Only re-render if files were removed (this is rare)
+                            renderFiles();
+                        }
+                        
                         updateTranscriptDisplay();
+                        updateTranscribeButton();
                         checkAllComplete();
                     }
                     
-                    // Stop monitoring if all files are complete or have errors
-                    const allFinished = selectedFiles.every(f => 
-                        f.status === 'completed' || f.status === 'error'
-                    );
+                    // Stop monitoring if all files are complete, have errors, or no files left
+                    // For chunked files, we need to check if ALL chunks are complete, not just the original file
+                    const allFinished = selectedFiles.length === 0 || selectedFiles.every(f => {
+                        // If this is a chunked file, check if all chunks are complete
+                        if (f.is_original) {
+                            // For original files, we need to check if all chunks are done
+                            // This will be handled by the backend progress updates
+                            return f.status === 'completed' || f.status === 'error';
+                        } else {
+                            // For single files, check if they're complete
+                            return f.status === 'completed' || f.status === 'error';
+                        }
+                    });
                     
                     if (allFinished) {
                         clearInterval(progressInterval);
                         progressInterval = null;
+                        
+                        // Release wake lock when transcription is complete
+                        await releaseWakeLock();
+                        
+                        // Reset transcribe button when all files are finished
+                        const transcribeButton = document.getElementById('transcribeButton');
+                        transcribeButton.disabled = false;
+                        transcribeButton.textContent = 'Transcribe';
+                        transcribeButton.style.opacity = '1';
+                        
+                        // Clear all file previews when transcription is complete
+                        selectedFiles = [];
+                        renderFiles();
                         
                         // Clean up input files
                         try {
@@ -593,24 +953,45 @@
         function updateTranscriptDisplay() {
             const transcriptContainer = document.getElementById('transcriptContainer');
             
-            // Clear existing transcripts
-            transcriptContainer.innerHTML = '';
-            
-            // Add individual transcript fields for each completed file
-            const completedFiles = selectedFiles.filter(f => f.status === 'completed' && f.transcript);
+            // Get currently completed files
+            const completedFiles = selectedFiles.filter(f => f.status === 'completed' || f.status === 'error');
             
             if (completedFiles.length > 0) {
-                completedFiles.forEach(fileData => {
-                    const transcriptDiv = document.createElement('div');
-                    transcriptDiv.className = 'transcript-item';
-                    transcriptDiv.innerHTML = `
-                        <div class="transcript-title">${fileData.filename}</div>
-                        <textarea class="transcript-field" readonly>${fileData.transcript}</textarea>
-                    `;
-                    transcriptContainer.appendChild(transcriptDiv);
-                });
-                
+                // Show container if it's hidden
                 transcriptContainer.classList.add('show');
+                
+                // Add new transcript items without re-rendering existing ones
+                completedFiles.forEach(fileData => {
+                    // Check if this transcript item already exists
+                    const existingItem = transcriptContainer.querySelector(`[data-transcript-id="${fileData.id}"]`);
+                    if (!existingItem) {
+                        // Create new transcript item
+                        const transcriptDiv = document.createElement('div');
+                        transcriptDiv.className = 'transcript-item';
+                        transcriptDiv.setAttribute('data-transcript-id', fileData.id);
+                        
+                        // Determine what to display in the text field
+                        let displayText = '';
+                        let fieldClass = 'transcript-field';
+                        
+                        if (fileData.status === 'completed' && fileData.transcript) {
+                            displayText = fileData.transcript;
+                        } else if (fileData.status === 'error' && fileData.error) {
+                            displayText = `Error: ${fileData.error}`;
+                            fieldClass += ' error-field'; // Add error styling
+                        } else if (fileData.status === 'completed') {
+                            displayText = 'Transcription completed but no transcript available.';
+                        } else {
+                            displayText = 'No transcript or error information available.';
+                        }
+                        
+                        transcriptDiv.innerHTML = `
+                            <div class="transcript-title">${fileData.filename}</div>
+                            <textarea class="${fieldClass}" readonly>${displayText}</textarea>
+                        `;
+                        transcriptContainer.appendChild(transcriptDiv);
+                    }
+                });
             } else {
                 transcriptContainer.classList.remove('show');
             }
@@ -621,6 +1002,20 @@
                                selectedFiles.every(f => f.status === 'completed' || f.status === 'error');
             
             if (allComplete && selectedFiles.some(f => f.status === 'completed')) {
+                // Collect errors from files that failed
+                const errorFiles = selectedFiles.filter(f => f.status === 'error' && f.error);
+                const errorSummary = document.getElementById('errorSummary');
+                
+                if (errorFiles.length > 0) {
+                    // Display errors
+                    const errorText = errorFiles.map(f => `${f.filename}: ${f.error}`).join('\n');
+                    errorSummary.textContent = `Errors occurred:\n${errorText}`;
+                    errorSummary.style.display = 'block';
+                } else {
+                    // No errors, hide error summary
+                    errorSummary.style.display = 'none';
+                }
+                
                 document.getElementById('successSection').classList.add('show');
                 
                 // Auto-scroll to the download button
@@ -662,14 +1057,14 @@
                 
                 if (response.ok) {
                     const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
                     a.download = 'all_transcripts.zip';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
                 } else {
                     const error = await response.json();
                     showError(`Download failed: ${error.error}`);
@@ -704,6 +1099,148 @@
                     errorDiv.parentNode.removeChild(errorDiv);
                 }
             }, 5000);
+        }
+
+        async function checkBackendConnectivity() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/progress`, {
+                    method: 'GET',
+                    // Add a timeout to prevent long waits
+                    signal: AbortSignal.timeout(3000) // 3 second timeout
+                });
+                
+                if (response.ok) {
+                    // Backend is running, hide error message
+                    const errorElement = document.getElementById('backendError');
+                    errorElement.classList.remove('show');
+                } else {
+                    // Backend responded but with error, show error message
+                    const errorElement = document.getElementById('backendError');
+                    errorElement.classList.add('show');
+                }
+            } catch (error) {
+                // Backend is not running or unreachable, show error message
+                const errorElement = document.getElementById('backendError');
+                errorElement.classList.add('show');
+                console.log('Backend connectivity check failed:', error.message);
+            }
+        }
+
+        async function checkTestingMode() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/testing-mode`, {
+                    method: 'GET',
+                    signal: AbortSignal.timeout(3000) // 3 second timeout
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const bannerElement = document.getElementById('testingModeBanner');
+                    
+                    if (data.testing_mode) {
+                        // Testing mode is ON - show green banner
+                        bannerElement.textContent = '🧪 Testing Mode: Whisper API is disabled for free development testing';
+                        bannerElement.className = 'testing-mode-banner testing show';
+                    } else {
+                        // Testing mode is OFF - show yellow banner
+                        bannerElement.textContent = '⚠️ Production Mode: Whisper API is enabled - transcription will cost money';
+                        bannerElement.className = 'testing-mode-banner production show';
+                    }
+                } else {
+                    // Hide banner if can't determine testing mode
+                    const bannerElement = document.getElementById('testingModeBanner');
+                    bannerElement.classList.remove('show');
+                }
+            } catch (error) {
+                // Hide banner if backend is not available
+                const bannerElement = document.getElementById('testingModeBanner');
+                bannerElement.classList.remove('show');
+                console.log('Testing mode check failed:', error.message);
+            }
+        }
+
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Wake lock requested successfully');
+                    
+                    // Listen for wake lock release
+                    wakeLock.addEventListener('release', () => {
+                        console.log('Wake lock was released');
+                    });
+                } else {
+                    console.log('Wake Lock API not supported in this browser');
+                }
+            } catch (err) {
+                console.log('Failed to request wake lock:', err);
+            }
+        }
+
+        async function releaseWakeLock() {
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                    console.log('Wake lock released successfully');
+                }
+            } catch (err) {
+                console.log('Failed to release wake lock:', err);
+            }
+        }
+
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        function calculateFileProgress(fileData) {
+            // Use server-provided progress if available
+            if (fileData.progress !== undefined) {
+                return fileData.progress;
+            }
+            
+            // Fallback to calculated progress for backward compatibility
+            // For single files (not chunked), progress is 0% when transcribing, 100% when completed
+            if (!fileData.is_original) {
+                return fileData.status === 'completed' ? 100 : 0;
+            }
+            
+            // For chunked files, calculate progress based on completed chunks
+            if (!fileData.chunks || fileData.chunks.length === 0) {
+                return 0;
+            }
+            
+            const completedChunks = fileData.chunks.filter(chunkId => {
+                const chunkData = selectedFiles.find(f => f.id === chunkId);
+                return chunkData && chunkData.status === 'completed';
+            }).length;
+            
+            const totalChunks = fileData.chunks.length;
+            const baseProgress = (completedChunks / totalChunks) * 100;
+            
+            // If all chunks are completed, return 100%
+            if (completedChunks === totalChunks) {
+                return 100;
+            }
+            
+            // If file is still transcribing, add smooth animation
+            if (fileData.status === 'transcribing') {
+                const elapsed = (Date.now() - fileData.transcriptionStartTime) / 1000;
+                const chunkProgress = (1 / totalChunks) * 100;
+                const animationProgress = Math.min(
+                    chunkProgress - 1, // 1% less than next checkpoint
+                    chunkProgress * (-Math.pow(10, -0.1 * elapsed) + 1)
+                );
+                
+                return baseProgress + animationProgress;
+            }
+            
+            return baseProgress;
         }
     </script>
 </body>

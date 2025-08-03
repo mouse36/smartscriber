@@ -39,7 +39,7 @@ input_files = [f for f in os.listdir(input_directory) if f.lower().endswith(SUPP
 for audio_file in input_files:
     audio_path = os.path.join(input_directory, audio_file)
     print(f"Starting transcription of [{audio_file}]...")
-    try:
+try:
         transcript = transcribe(audio_path)
         print(f"\nTranscription done! Transcript of {audio_file}:\n\n" + transcript)
 
@@ -47,13 +47,13 @@ for audio_file in input_files:
         cc = OpenCC('t2s')
         simplified_transcript = cc.convert(transcript)
 
-        # Write to file
+    # Write to file
         output_path = os.path.join(output_directory, audio_file + ".srt")
         print(f"Attempting to save this transcript file to: {output_path} ...")
         with open(output_path, "w", encoding="utf-8") as output_location:
             output_location.write(simplified_transcript)
         print(f"Yippee!!! Transcript of {audio_file} successfully saved as {audio_file}.srt at backend/output/")
-    except Exception as e:
+except Exception as e:
         print(f"An error occurred while processing {audio_file}: {e}")
         import traceback
         traceback.print_exc()
