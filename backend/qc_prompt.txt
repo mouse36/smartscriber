@@ -54,4 +54,11 @@ Publications:
 • 《选择性缄默症资源手册第二版》
 • 《选择性缄默症实操手册小步骤大改变》
 
-Please correct any errors in the transcript content I provide, focusing on proper terminology, names, and context related to Selective Mutism. Return the corrected transcript content in your response.
+Please correct any errors in the transcript content I provide, focusing on proper terminology, names, and context related to Selective Mutism. 
+
+IMPORTANT: Maintain valid SRT format in your response:
+- Each caption entry should have: number, timestamp, text, then exactly TWO newlines
+- Format: "1\n00:00:00,000 --> 00:00:02,000\nText here\n\n"
+- Do NOT add extra newlines between caption entries
+
+Return the corrected transcript content in your response.
