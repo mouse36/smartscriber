@@ -27,7 +27,8 @@ CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB max upload size
 
 UPLOAD_FOLDER = 'backend/input'
-OUTPUT_FOLDER = 'backend/output'
+UNREVISED_FOLDER = 'backend/unrevised_transcripts'
+REVISED_FOLDER = 'backend/revised_transcripts'
 CHUNK_SIZE = 24 * 1024 * 1024  # 24MB chunks
 ALLOWED_EXTENSIONS = {
     'mp3', 'wav', 'm4a', 'flac', 'ogg', 'mp4', 'mpeg', 'mpga', 'webm',
@@ -35,7 +36,8 @@ ALLOWED_EXTENSIONS = {
 }
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(UNREVISED_FOLDER, exist_ok=True)
+os.makedirs(REVISED_FOLDER, exist_ok=True)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 transcription_progress = {}
@@ -421,7 +423,7 @@ def transcribe_file(file_path, file_id):
                 base_name = os.path.splitext(filename)[0]
                 output_filename = f"{base_name}.srt"
             
-            output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+            output_path = os.path.join(UNREVISED_FOLDER, output_filename)
             
             with open(output_path, "w", encoding="utf-8") as output_file:
                 output_file.write(simplified_transcript)
@@ -455,7 +457,7 @@ def write_chunk_to_output(chunk_id, original_filename, transcript):
     # Remove file extension from original filename
     base_name = os.path.splitext(original_filename)[0]
     output_filename = f"{base_name}.srt"
-    output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+    output_path = os.path.join(UNREVISED_FOLDER, output_filename)
     
     # Get chunk information for timestamp adjustment
     chunk_info = transcription_progress[chunk_id]
@@ -551,15 +553,15 @@ def get_current_session_transcript_files():
     """Get transcript files only for files currently being processed in the application"""
     transcript_files = []
     
-    if not os.path.exists(OUTPUT_FOLDER):
+    if not os.path.exists(UNREVISED_FOLDER):
         return transcript_files
     
     print(f"DEBUG: Current session files from tracking: {list(current_session_files)}")
     
     # Look for transcript files that match current session files
-    for filename in os.listdir(OUTPUT_FOLDER):
+    for filename in os.listdir(UNREVISED_FOLDER):
         if filename.endswith('.srt'):
-            file_path = os.path.join(OUTPUT_FOLDER, filename)
+            file_path = os.path.join(UNREVISED_FOLDER, filename)
             if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
                 # Remove .srt extension to get base name
                 base_name = os.path.splitext(filename)[0]
@@ -672,17 +674,6 @@ def process_chatgpt_response(all_responses, original_files):
     try:
         print("Processing ChatGPT responses...")
         
-        # Create a backup directory for original transcripts
-        backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
-        os.makedirs(backup_dir, exist_ok=True)
-        
-        # Backup original files
-        for original_file in original_files:
-            backup_path = os.path.join(backup_dir, original_file['filename'])
-            if not os.path.exists(backup_path):  # Don't overwrite existing backups
-                subprocess.run(['cp', original_file['path'], backup_path])
-                print(f"Backed up {original_file['filename']} to backup directory")
-        
         # Process each file's responses
         for file_response in all_responses:
             filename = file_response['filename']
@@ -701,24 +692,11 @@ def process_chatgpt_response(all_responses, original_files):
                         combined_content += "\n\n"
             
             if combined_content:
-                # Find the original file path
-                original_path = None
-                for orig_file in original_files:
-                    if orig_file['filename'] == filename:
-                        original_path = orig_file['path']
-                        break
-                
-                if original_path:
-                    # Write the revised content to the original file location
-                    with open(original_path, 'w', encoding='utf-8') as f:
-                        f.write(combined_content)
-                    print(f"Replaced {filename} with revised version")
-                else:
-                    # Create new file with revised content
-                    new_path = os.path.join(OUTPUT_FOLDER, f"revised_{filename}")
-                    with open(new_path, 'w', encoding='utf-8') as f:
-                        f.write(combined_content)
-                    print(f"Created new revised file: {new_path}")
+                # Create revised transcript in the revised folder
+                revised_path = os.path.join(REVISED_FOLDER, filename)
+                with open(revised_path, 'w', encoding='utf-8') as f:
+                    f.write(combined_content)
+                print(f"Created revised transcript: {revised_path}")
             else:
                 print(f"Could not extract revised content for {filename}")
         
@@ -951,7 +929,7 @@ def upload_files():
                             # Create empty transcript file immediately when chunking starts
                             base_name = os.path.splitext(original_filename)[0]
                             output_filename = f"{base_name}.srt"
-                            output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+                            output_path = os.path.join(UNREVISED_FOLDER, output_filename)
                             
                             # Create empty file if it doesn't exist
                             if not os.path.exists(output_path):
@@ -1205,7 +1183,7 @@ def download_transcript(file_id):
             if file_info.get('output_path') and os.path.exists(file_info['output_path']):
                 print(f"Found output_path: {file_info['output_path']}")
                 return send_from_directory(
-                    OUTPUT_FOLDER,
+                    UNREVISED_FOLDER,
                     os.path.basename(file_info['output_path']),
                     as_attachment=True
                 )
@@ -1216,13 +1194,13 @@ def download_transcript(file_id):
                 if original_filename:
                     base_name = os.path.splitext(original_filename)[0]
                     output_filename = f"{base_name}.srt"
-                    output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+                    output_path = os.path.join(UNREVISED_FOLDER, output_filename)
                     print(f"Checking for file: {output_path}")
                     
                     if os.path.exists(output_path):
                         print(f"Found file at: {output_path}")
                         return send_from_directory(
-                            OUTPUT_FOLDER,
+                            UNREVISED_FOLDER,
                             output_filename,
                             as_attachment=True
                         )
@@ -1235,7 +1213,7 @@ def download_transcript(file_id):
             if os.path.exists(file_info['output_path']):
                 print(f"File exists, sending: {file_info['output_path']}")
                 return send_from_directory(
-                    OUTPUT_FOLDER,
+                    UNREVISED_FOLDER,
                     os.path.basename(file_info['output_path']),
                     as_attachment=True
                 )
@@ -1274,7 +1252,7 @@ def download_all_transcripts():
                     original_filename = file_info['original_filename']
                     base_name = os.path.splitext(original_filename)[0]
                     output_filename = f"{base_name}.srt"
-                    output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+                    output_path = os.path.join(UNREVISED_FOLDER, output_filename)
                     
                     if os.path.exists(output_path):
                         zipf.write(output_path, output_filename)
@@ -1375,18 +1353,13 @@ def get_quality_control_status():
         transcript_files = get_current_session_transcript_files()
         
         # Check if quality control has been run
-        qc_response_file = os.path.join(OUTPUT_FOLDER, 'chatgpt_quality_control_response.txt')
+        qc_response_file = os.path.join(REVISED_FOLDER, 'chatgpt_quality_control_response.txt')
         qc_completed = os.path.exists(qc_response_file)
-        
-        # Check if backup directory exists
-        backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
-        backup_exists = os.path.exists(backup_dir)
         
         return jsonify({
             'all_transcriptions_complete': all_complete,
             'transcript_files_count': len(transcript_files),
             'quality_control_completed': qc_completed,
-            'backup_created': backup_exists,
             'transcript_files': [f['filename'] for f in transcript_files],
             'current_session_files': list(current_session_files),
             'total_files_in_progress': len(transcription_progress)

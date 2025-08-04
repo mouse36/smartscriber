@@ -1,4 +1,5 @@
 .env
 .DS_Store
 backend/input/
-backend/output/
+backend/revised_transcripts/
+backend/unrevised_transcripts/
