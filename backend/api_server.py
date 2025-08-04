@@ -601,47 +601,76 @@ def send_quality_control_request():
 
 I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision."""
         
-        # Prepare the message with file attachments
-        messages = [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
+        # Process each transcript file individually to avoid token limits
+        all_responses = []
         
-        # For now, we'll include the transcript content in the message since file uploads require special handling
-        # In a production system, you might want to use the Files API or Assistant API for file attachments
         for transcript_file in transcript_files:
+            print(f"Processing {transcript_file['filename']}...")
+            
             with open(transcript_file['path'], 'r', encoding='utf-8') as f:
                 content = f.read()
-                messages.append({
-                    "role": "user", 
-                    "content": f"Transcript file: {transcript_file['filename']}\n\n{content}\n\n---"
-                })
+            
+            # Split large content into chunks if needed
+            content_chunks = []
+            if len(content) > 4000:  # Conservative chunk size
+                # Split by SRT blocks (double newlines)
+                blocks = content.split('\n\n')
+                current_chunk = ""
+                
+                for block in blocks:
+                    if len(current_chunk + block) > 4000:
+                        if current_chunk:
+                            content_chunks.append(current_chunk.strip())
+                        current_chunk = block
+                    else:
+                        current_chunk += '\n\n' + block if current_chunk else block
+                
+                if current_chunk:
+                    content_chunks.append(current_chunk.strip())
+            else:
+                content_chunks = [content]
+            
+            # Process each chunk
+            file_responses = []
+            for i, chunk in enumerate(content_chunks):
+                # Put the transcript content directly in the message, not as an attachment
+                message_content = f"{prompt}\n\nHere is the transcript content for {transcript_file['filename']} (chunk {i+1}/{len(content_chunks)}):\n\n{chunk}\n\nPlease provide the corrected version of this transcript content in your response."
+                
+                chunk_messages = [
+                    {
+                        "role": "user",
+                        "content": message_content
+                    }
+                ]
+                
+                print(f"  Sending chunk {i+1}/{len(content_chunks)} to ChatGPT...")
+                response = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=chunk_messages,
+                    max_tokens=4000,  # Allow longer responses for revised content
+                    temperature=0.1
+                )
+                
+                chunk_response = response.choices[0].message.content
+                file_responses.append(chunk_response)
+            
+            # Combine all chunks for this file
+            all_responses.append({
+                'filename': transcript_file['filename'],
+                'responses': file_responses
+            })
         
-        # Call ChatGPT
-        print("Sending request to ChatGPT...")
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            max_tokens=4000,
-            temperature=0.1
-        )
-        
-        assistant_response = response.choices[0].message.content
-        print("Received response from ChatGPT")
-        
-        # Process the response to extract revised transcripts
-        return process_chatgpt_response(assistant_response, transcript_files)
+        # Process all responses to extract revised transcripts
+        return process_chatgpt_response(all_responses, transcript_files)
         
     except Exception as e:
         print(f"Quality control request failed: {str(e)}")
         return False
 
-def process_chatgpt_response(response_content, original_files):
-    """Process ChatGPT response and extract revised transcript files"""
+def process_chatgpt_response(all_responses, original_files):
+    """Process ChatGPT responses and extract revised transcript files"""
     try:
-        print("Processing ChatGPT response...")
+        print("Processing ChatGPT responses...")
         
         # Create a backup directory for original transcripts
         backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
@@ -654,47 +683,75 @@ def process_chatgpt_response(response_content, original_files):
                 subprocess.run(['cp', original_file['path'], backup_path])
                 print(f"Backed up {original_file['filename']} to backup directory")
         
-        # Save the full ChatGPT response for reference
-        response_path = os.path.join(OUTPUT_FOLDER, 'chatgpt_quality_control_response.txt')
-        with open(response_path, 'w', encoding='utf-8') as f:
-            f.write(response_content)
-        print(f"ChatGPT response saved to: {response_path}")
-        
-        # Try to extract revised transcripts from the response
-        extracted_files = extract_transcripts_from_response(response_content, original_files)
-        
-        if extracted_files:
-            print(f"Successfully extracted {len(extracted_files)} revised transcript files")
+        # Process each file's responses
+        for file_response in all_responses:
+            filename = file_response['filename']
+            responses = file_response['responses']
             
-            # Replace original files with revised versions
-            for original_file, revised_content in extracted_files.items():
+            print(f"Processing responses for {filename}...")
+            
+            # Combine all chunks for this file
+            combined_content = ""
+            for i, response in enumerate(responses):
+                # Extract SRT content from each response
+                extracted_content = extract_srt_from_response(response)
+                if extracted_content:
+                    combined_content += extracted_content
+                    if i < len(responses) - 1:  # Add separator between chunks
+                        combined_content += "\n\n"
+            
+            if combined_content:
+                # Find the original file path
                 original_path = None
                 for orig_file in original_files:
-                    if orig_file['filename'] == original_file:
+                    if orig_file['filename'] == filename:
                         original_path = orig_file['path']
                         break
                 
                 if original_path:
                     # Write the revised content to the original file location
                     with open(original_path, 'w', encoding='utf-8') as f:
-                        f.write(revised_content)
-                    print(f"Replaced {original_file} with revised version")
+                        f.write(combined_content)
+                    print(f"Replaced {filename} with revised version")
                 else:
                     # Create new file with revised content
-                    new_path = os.path.join(OUTPUT_FOLDER, f"revised_{original_file}")
+                    new_path = os.path.join(OUTPUT_FOLDER, f"revised_{filename}")
                     with open(new_path, 'w', encoding='utf-8') as f:
-                        f.write(revised_content)
+                        f.write(combined_content)
                     print(f"Created new revised file: {new_path}")
-            
-            print("Quality control process completed successfully with automatic file extraction")
-        else:
-            print("Could not automatically extract revised transcripts. Please review the response file manually.")
+            else:
+                print(f"Could not extract revised content for {filename}")
         
+        print("Quality control process completed successfully")
         return True
         
     except Exception as e:
-        print(f"Error processing ChatGPT response: {str(e)}")
+        print(f"Error processing ChatGPT responses: {str(e)}")
         return False
+
+def extract_srt_from_response(response_content):
+    """Extract SRT content from a ChatGPT response"""
+    try:
+        # Look for SRT content patterns
+        patterns = [
+            r'(\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?)(?=\n\d+\n\d{2}:\d{2}:\d{2},\d{3} --> |\Z)',
+            r'((?:\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?\n*)+)'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response_content, re.MULTILINE | re.DOTALL)
+            if matches:
+                # Combine all matches
+                combined = '\n\n'.join(matches)
+                if validate_srt_content(combined):
+                    return combined
+        
+        # If no SRT pattern found, return the entire response (might be just the revised content)
+        return response_content.strip()
+        
+    except Exception as e:
+        print(f"Error extracting SRT from response: {str(e)}")
+        return ""
 
 def extract_transcripts_from_response(response_content, original_files):
     """Extract individual transcript files from ChatGPT response"""

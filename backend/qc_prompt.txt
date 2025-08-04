@@ -1,6 +1,6 @@
 I am working for the Selective Mutism Association of China to help mass transcribe video data into SRT transcripts to train an agent powered by a large language model to help clients. Currently I have produced some preliminary transcripts, which are attached here.
 
-I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts based on the vocabulary list below. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision.
+I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts based on the vocabulary list below. Please provide the corrected transcript content directly in your response (not as an attachment), which I will directly use to train the LLM without further revision.
 
 Here is the essential vocabulary for Selective Mutism (SM) and interventions in Chinese:
 
@@ -53,3 +53,5 @@ Publications:
 • 《选择性缄默症家长和教师手册》
 • 《选择性缄默症资源手册第二版》
 • 《选择性缄默症实操手册小步骤大改变》
+
+Please correct any errors in the transcript content I provide, focusing on proper terminology, names, and context related to Selective Mutism. Return the corrected transcript content in your response.
