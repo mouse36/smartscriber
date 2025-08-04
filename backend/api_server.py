@@ -32,7 +32,7 @@ REVISED_FOLDER = 'backend/revised_transcripts'
 CHUNK_SIZE = 24 * 1024 * 1024  # 24MB chunks
 ALLOWED_EXTENSIONS = {
     'mp3', 'wav', 'm4a', 'flac', 'ogg', 'mp4', 'mpeg', 'mpga', 'webm',
-    'm4v', 'wma', 'aac', 'm4b', 'm4p', 'm4r'
+    'm4v', 'wma', 'aac', 'm4b', 'm4p', 'm4r', 'srt'
 }
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -46,6 +46,10 @@ current_session_files = set()  # Track files from current session for quality co
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def is_transcript_file(filename):
+    """Check if the uploaded file is a transcript file (.srt)"""
+    return filename.lower().endswith('.srt')
 
 def safe_filename(filename):
     """Create a safe filename while preserving original name for display"""
@@ -827,7 +831,48 @@ def upload_files():
 
                 print(f"Uploaded file: {original_filename} (saved as {safe_filename_for_fs})")
 
-                # Check if file needs splitting
+                # Check if this is a transcript file
+                if is_transcript_file(original_filename):
+                    print(f"File {original_filename} is a transcript file, skipping transcription")
+                    
+                    # Copy transcript file directly to unrevised_transcripts folder
+                    transcript_filename = safe_filename_for_fs
+                    transcript_path = os.path.join(UNREVISED_FOLDER, transcript_filename)
+                    
+                    # Copy the file
+                    import shutil
+                    shutil.copy2(file_path, transcript_path)
+                    
+                    # Remove the original uploaded file
+                    os.remove(file_path)
+                    
+                    # Create entry for transcript file (marked as completed)
+                    file_id = f"{int(time.time() * 1000)}_{safe_filename_for_fs}"
+                    uploaded_files.append({
+                        'id': file_id,
+                        'filename': original_filename,  # Use original name for display
+                        'path': transcript_path,
+                        'size': os.path.getsize(transcript_path),  # Add file size
+                        'is_transcript': True
+                    })
+                    transcription_progress[file_id] = {
+                        'status': 'completed',
+                        'progress': 100,  # Already completed
+                        'error': None,
+                        'transcript': None,
+                        'output_path': transcript_path,
+                        'is_transcript': True,
+                        'original_filename': original_filename
+                    }
+                    
+                    # Add to current session tracking
+                    base_name = os.path.splitext(original_filename)[0]
+                    current_session_files.add(base_name)
+                    print(f"DEBUG: Added transcript to current session: {base_name}")
+                    
+                    continue  # Skip the rest of the processing for transcript files
+
+                # Check if file needs splitting (only for audio/video files)
                 file_size = os.path.getsize(file_path)
                 if file_size > CHUNK_SIZE:
                     print(f"File {original_filename} is large ({file_size} bytes), will be split")
@@ -1403,6 +1448,33 @@ def clear_session():
     
     except Exception as e:
         return jsonify({'error': f'Failed to clear session: {str(e)}'}), 500
+
+@app.route('/download-all-revised')
+def download_all_revised_transcripts():
+    try:
+        import zipfile
+        import tempfile
+
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+
+        with zipfile.ZipFile(temp_zip.name, 'w') as zipf:
+            # Add all revised transcript files
+            if os.path.exists(REVISED_FOLDER):
+                for filename in os.listdir(REVISED_FOLDER):
+                    if filename.endswith('.srt'):
+                        file_path = os.path.join(REVISED_FOLDER, filename)
+                        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                            zipf.write(file_path, filename)
+
+        return send_from_directory(
+            os.path.dirname(temp_zip.name),
+            os.path.basename(temp_zip.name),
+            as_attachment=True,
+            download_name='all_revised_transcripts.zip'
+        )
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to create zip: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
