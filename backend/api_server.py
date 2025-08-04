@@ -544,21 +544,41 @@ def check_all_transcriptions_complete():
     
     return True
 
-def get_all_transcript_files():
-    """Get all completed transcript files from the output directory"""
+def get_current_session_transcript_files():
+    """Get transcript files only for files currently being processed in the application"""
     transcript_files = []
     
     if not os.path.exists(OUTPUT_FOLDER):
         return transcript_files
     
+    # Get all original filenames that are currently being processed
+    current_session_files = set()
+    for file_id, file_info in transcription_progress.items():
+        # Only include original files and single files (not individual chunks)
+        if file_info.get('is_original') or not file_info.get('original_file'):
+            original_filename = file_info.get('original_filename')
+            if original_filename:
+                # Remove file extension to get base name
+                base_name = os.path.splitext(original_filename)[0]
+                current_session_files.add(base_name)
+    
+    # Look for transcript files that match current session files
     for filename in os.listdir(OUTPUT_FOLDER):
         if filename.endswith('.srt'):
             file_path = os.path.join(OUTPUT_FOLDER, filename)
             if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                transcript_files.append({
-                    'filename': filename,
-                    'path': file_path
-                })
+                # Remove .srt extension to get base name
+                base_name = os.path.splitext(filename)[0]
+                
+                # Check if this transcript belongs to a current session file
+                if base_name in current_session_files:
+                    transcript_files.append({
+                        'filename': filename,
+                        'path': file_path
+                    })
+                    print(f"Including transcript for current session: {filename}")
+                else:
+                    print(f"Skipping transcript from previous session: {filename}")
     
     return transcript_files
 
@@ -567,8 +587,8 @@ def send_quality_control_request():
     try:
         print("Starting quality control process...")
         
-        # Get all transcript files
-        transcript_files = get_all_transcript_files()
+        # Get transcript files only for current session
+        transcript_files = get_current_session_transcript_files()
         
         if not transcript_files:
             print("No transcript files found for quality control")
@@ -585,9 +605,7 @@ def send_quality_control_request():
             print(f"Warning: Quality control prompt file not found at {prompt_file_path}")
             prompt = """I am working for the Selective Mutism Association of China to help mass transcribe video data into SRT transcripts to train a large language model to help clients. Currently I have produced some preliminary transcripts, which are attached below.
 
-I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts based on the vocabulary list below. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision.
-
-[vocabulary list to be added here]"""
+I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision."""
         
         # Prepare the message with file attachments
         messages = [
@@ -1285,7 +1303,7 @@ def get_quality_control_status():
     """Get quality control status"""
     try:
         all_complete = check_all_transcriptions_complete()
-        transcript_files = get_all_transcript_files()
+        transcript_files = get_current_session_transcript_files()
         
         # Check if quality control has been run
         qc_response_file = os.path.join(OUTPUT_FOLDER, 'chatgpt_quality_control_response.txt')
@@ -1295,12 +1313,23 @@ def get_quality_control_status():
         backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
         backup_exists = os.path.exists(backup_dir)
         
+        # Get current session files for debugging
+        current_session_files = set()
+        for file_id, file_info in transcription_progress.items():
+            if file_info.get('is_original') or not file_info.get('original_file'):
+                original_filename = file_info.get('original_filename')
+                if original_filename:
+                    base_name = os.path.splitext(original_filename)[0]
+                    current_session_files.add(base_name)
+        
         return jsonify({
             'all_transcriptions_complete': all_complete,
             'transcript_files_count': len(transcript_files),
             'quality_control_completed': qc_completed,
             'backup_created': backup_exists,
-            'transcript_files': [f['filename'] for f in transcript_files]
+            'transcript_files': [f['filename'] for f in transcript_files],
+            'current_session_files': list(current_session_files),
+            'total_files_in_progress': len(transcription_progress)
         })
     
     except Exception as e:
