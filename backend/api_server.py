@@ -1319,6 +1319,14 @@ def remove_file(file_id):
         if 'path' in file_info and os.path.exists(file_info['path']):
             os.remove(file_info['path'])
         
+        # Remove from current session tracking
+        original_filename = file_info.get('original_filename')
+        if original_filename:
+            base_name = os.path.splitext(original_filename)[0]
+            if base_name in current_session_files:
+                current_session_files.remove(base_name)
+                print(f"Removed {base_name} from current session tracking")
+        
         # Remove from progress tracking
         del transcription_progress[file_id]
         
