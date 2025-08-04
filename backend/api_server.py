@@ -576,8 +576,14 @@ def send_quality_control_request():
         
         print(f"Found {len(transcript_files)} transcript files for quality control")
         
-        # Create the prompt
-        prompt = """I am working for the Selective Mutism Association of China to help mass transcribe video data into SRT transcripts to train a large language model to help clients. Currently I have produced some preliminary transcripts, which are attached below.
+        # Read the prompt from file
+        prompt_file_path = os.path.join(os.path.dirname(__file__), 'qc_prompt.txt')
+        try:
+            with open(prompt_file_path, 'r', encoding='utf-8') as f:
+                prompt = f.read().strip()
+        except FileNotFoundError:
+            print(f"Warning: Quality control prompt file not found at {prompt_file_path}")
+            prompt = """I am working for the Selective Mutism Association of China to help mass transcribe video data into SRT transcripts to train a large language model to help clients. Currently I have produced some preliminary transcripts, which are attached below.
 
 I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts based on the vocabulary list below. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision.
 
