@@ -40,6 +40,7 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 transcription_progress = {}
 original_files = {}  # Track original files and their chunks
+current_session_files = set()  # Track files from current session for quality control
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -341,6 +342,7 @@ def update_original_file_progress(original_filename):
                     
                     # Check if all transcriptions are complete and trigger quality control
                     def check_and_trigger_qc():
+                        import time
                         time.sleep(2)  # Small delay to ensure all files are processed
                         if check_all_transcriptions_complete():
                             print("All transcriptions complete, triggering quality control...")
@@ -428,6 +430,7 @@ def transcribe_file(file_path, file_id):
             
             # Check if all transcriptions are complete and trigger quality control
             def check_and_trigger_qc():
+                import time
                 time.sleep(2)  # Small delay to ensure all files are processed
                 if check_all_transcriptions_complete():
                     print("All transcriptions complete, triggering quality control...")
@@ -551,16 +554,7 @@ def get_current_session_transcript_files():
     if not os.path.exists(OUTPUT_FOLDER):
         return transcript_files
     
-    # Get all original filenames that are currently being processed
-    current_session_files = set()
-    for file_id, file_info in transcription_progress.items():
-        # Only include original files and single files (not individual chunks)
-        if file_info.get('is_original') or not file_info.get('original_file'):
-            original_filename = file_info.get('original_filename')
-            if original_filename:
-                # Remove file extension to get base name
-                base_name = os.path.splitext(original_filename)[0]
-                current_session_files.add(base_name)
+    print(f"DEBUG: Current session files from tracking: {list(current_session_files)}")
     
     # Look for transcript files that match current session files
     for filename in os.listdir(OUTPUT_FOLDER):
@@ -822,6 +816,11 @@ def upload_files():
                         'original_filename': original_filename  # Store the full original filename
                     }
                     
+                    # Add to current session tracking
+                    base_name = os.path.splitext(original_filename)[0]
+                    current_session_files.add(base_name)
+                    print(f"DEBUG: Added to current session: {base_name}")
+                    
                     # Start chunking in background
                     def chunk_file(file_path, original_filename, file_id):
                         try:
@@ -961,6 +960,11 @@ def upload_files():
                         'transcript': None,
                         'output_path': None
                     }
+                    
+                    # Add to current session tracking
+                    base_name = os.path.splitext(original_filename)[0]
+                    current_session_files.add(base_name)
+                    print(f"DEBUG: Added to current session: {base_name}")
             else:
                 return jsonify({'error': f'File type not allowed: {file.filename}'}), 400
 
@@ -1313,15 +1317,6 @@ def get_quality_control_status():
         backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
         backup_exists = os.path.exists(backup_dir)
         
-        # Get current session files for debugging
-        current_session_files = set()
-        for file_id, file_info in transcription_progress.items():
-            if file_info.get('is_original') or not file_info.get('original_file'):
-                original_filename = file_info.get('original_filename')
-                if original_filename:
-                    base_name = os.path.splitext(original_filename)[0]
-                    current_session_files.add(base_name)
-        
         return jsonify({
             'all_transcriptions_complete': all_complete,
             'transcript_files_count': len(transcript_files),
@@ -1334,6 +1329,42 @@ def get_quality_control_status():
     
     except Exception as e:
         return jsonify({'error': f'Failed to get quality control status: {str(e)}'}), 500
+
+@app.route('/quality-control/add-session-files', methods=['POST'])
+def add_session_files():
+    """Manually add files to current session for testing"""
+    try:
+        data = request.get_json()
+        files = data.get('files', [])
+        
+        for filename in files:
+            base_name = os.path.splitext(filename)[0]
+            current_session_files.add(base_name)
+            print(f"Added to current session: {base_name}")
+        
+        return jsonify({
+            'message': f'Added {len(files)} files to current session',
+            'current_session_files': list(current_session_files)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': f'Failed to add session files: {str(e)}'}), 500
+
+@app.route('/quality-control/clear-session', methods=['POST'])
+def clear_session():
+    """Clear current session files"""
+    try:
+        global current_session_files
+        current_session_files.clear()
+        print("Cleared current session files")
+        
+        return jsonify({
+            'message': 'Current session cleared',
+            'current_session_files': list(current_session_files)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': f'Failed to clear session: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
