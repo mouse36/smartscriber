@@ -392,7 +392,37 @@
             background: #0056b3;
         }
 
+        .quality-control-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 25px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-left: 10px;
+        }
+
+        .quality-control-button:hover {
+            background: #1e7e34;
+        }
+
+        .quality-control-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
         .download-icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        .qc-icon {
             width: 18px;
             height: 18px;
         }
@@ -463,6 +493,12 @@
                     <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" />
                 </svg>
                 Download All Transcripts
+            </button>
+            <button class="quality-control-button" id="qualityControlButton" onclick="triggerQualityControl()">
+                <svg class="qc-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z" />
+                </svg>
+                Quality Control with ChatGPT
             </button>
         </div>
     </div>
@@ -1112,6 +1148,86 @@
                     errorDiv.parentNode.removeChild(errorDiv);
                 }
             }, 5000);
+        }
+
+        async function triggerQualityControl() {
+            const button = document.getElementById('qualityControlButton');
+            
+            try {
+                // Disable button and show loading state
+                button.disabled = true;
+                button.innerHTML = `
+                    <div class="loading-spinner"></div>
+                    Processing with ChatGPT...
+                `;
+                
+                // Check quality control status first
+                const statusResponse = await fetch(`${API_BASE_URL}/quality-control/status`);
+                const statusData = await statusResponse.json();
+                
+                if (!statusData.all_transcriptions_complete) {
+                    showError('All transcriptions must be complete before running quality control');
+                    return;
+                }
+                
+                if (statusData.transcript_files_count === 0) {
+                    showError('No transcript files found for quality control');
+                    return;
+                }
+                
+                // Trigger quality control
+                const response = await fetch(`${API_BASE_URL}/quality-control/trigger`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Show success message
+                    const successDiv = document.createElement('div');
+                    successDiv.className = 'success-message-modal';
+                    successDiv.style.cssText = `
+                        position: fixed;
+                        top: 20px;
+                        right: 20px;
+                        background: #d4edda;
+                        color: #155724;
+                        padding: 15px 20px;
+                        border: 1px solid #c3e6cb;
+                        border-radius: 8px;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        z-index: 1000;
+                        max-width: 400px;
+                        word-wrap: break-word;
+                        font-size: 0.9rem;
+                    `;
+                    successDiv.textContent = 'Quality control request sent to ChatGPT successfully! Check the backend/output folder for results.';
+                    
+                    document.body.appendChild(successDiv);
+                    
+                    // Remove after 8 seconds
+                    setTimeout(() => {
+                        if (successDiv.parentNode) {
+                            successDiv.parentNode.removeChild(successDiv);
+                        }
+                    }, 8000);
+                    
+                } else {
+                    showError(`Quality control failed: ${result.error || result.message}`);
+                }
+                
+            } catch (error) {
+                showError(`Quality control failed: ${error.message}`);
+            } finally {
+                // Re-enable button
+                button.disabled = false;
+                button.innerHTML = `
+                    <svg class="qc-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z" />
+                    </svg>
+                    Quality Control with ChatGPT
+                `;
+            }
         }
 
         async function checkBackendConnectivity() {

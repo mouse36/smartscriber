@@ -11,6 +11,10 @@ import subprocess
 import tempfile
 from collections import defaultdict
 import re
+import json
+import zipfile
+from io import BytesIO
+import base64
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -334,6 +338,16 @@ def update_original_file_progress(original_filename):
                 if os.path.exists(output_path):
                     transcription_progress[original_file_id]['output_path'] = output_path
                     print(f"DEBUG: Output file exists: {output_path}")
+                    
+                    # Check if all transcriptions are complete and trigger quality control
+                    def check_and_trigger_qc():
+                        time.sleep(2)  # Small delay to ensure all files are processed
+                        if check_all_transcriptions_complete():
+                            print("All transcriptions complete, triggering quality control...")
+                            trigger_quality_control()
+                    
+                    # Start quality control check in a separate thread
+                    threading.Thread(target=check_and_trigger_qc).start()
                 else:
                     print(f"DEBUG: WARNING: Output file does not exist yet: {output_path}")
                     # Don't mark as completed if the file doesn't exist yet
@@ -411,6 +425,16 @@ def transcribe_file(file_path, file_id):
                 output_file.write(simplified_transcript)
             
             transcription_progress[file_id]['output_path'] = output_path
+            
+            # Check if all transcriptions are complete and trigger quality control
+            def check_and_trigger_qc():
+                time.sleep(2)  # Small delay to ensure all files are processed
+                if check_all_transcriptions_complete():
+                    print("All transcriptions complete, triggering quality control...")
+                    trigger_quality_control()
+            
+            # Start quality control check in a separate thread
+            threading.Thread(target=check_and_trigger_qc).start()
 
         os.remove(file_path)
         print(f"Completed transcription for {file_id}")
@@ -505,6 +529,229 @@ def write_chunk_to_output(chunk_id, original_filename, transcript):
         transcription_progress[original_file_id]['output_path'] = output_path
     
     print(f"Processed chunk {chunk_index} for {original_filename}")
+
+def check_all_transcriptions_complete():
+    """Check if all transcription tasks are complete"""
+    if not transcription_progress:
+        return False
+    
+    for file_id, file_info in transcription_progress.items():
+        # Only check original files and single files, not individual chunks
+        if file_info.get('is_original') or not file_info.get('original_file'):
+            status = file_info.get('status')
+            if status not in ['completed', 'error']:
+                return False
+    
+    return True
+
+def get_all_transcript_files():
+    """Get all completed transcript files from the output directory"""
+    transcript_files = []
+    
+    if not os.path.exists(OUTPUT_FOLDER):
+        return transcript_files
+    
+    for filename in os.listdir(OUTPUT_FOLDER):
+        if filename.endswith('.srt'):
+            file_path = os.path.join(OUTPUT_FOLDER, filename)
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                transcript_files.append({
+                    'filename': filename,
+                    'path': file_path
+                })
+    
+    return transcript_files
+
+def send_quality_control_request():
+    """Send quality control request to ChatGPT with all transcript files"""
+    try:
+        print("Starting quality control process...")
+        
+        # Get all transcript files
+        transcript_files = get_all_transcript_files()
+        
+        if not transcript_files:
+            print("No transcript files found for quality control")
+            return False
+        
+        print(f"Found {len(transcript_files)} transcript files for quality control")
+        
+        # Create the prompt
+        prompt = """I am working for the Selective Mutism Association of China to help mass transcribe video data into SRT transcripts to train a large language model to help clients. Currently I have produced some preliminary transcripts, which are attached below.
+
+I used the OpenAI Whisper API to transcribe the videos without context, so the transcripts contain some errors. Your job is to perform quality control by correcting the errors in all the transcripts based on the vocabulary list below. Attach the revised transcripts as files in your response, which I will directly use to train the LLM without further revision.
+
+[vocabulary list to be added here]"""
+        
+        # Prepare the message with file attachments
+        messages = [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        # For now, we'll include the transcript content in the message since file uploads require special handling
+        # In a production system, you might want to use the Files API or Assistant API for file attachments
+        for transcript_file in transcript_files:
+            with open(transcript_file['path'], 'r', encoding='utf-8') as f:
+                content = f.read()
+                messages.append({
+                    "role": "user", 
+                    "content": f"Transcript file: {transcript_file['filename']}\n\n{content}\n\n---"
+                })
+        
+        # Call ChatGPT
+        print("Sending request to ChatGPT...")
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            max_tokens=4000,
+            temperature=0.1
+        )
+        
+        assistant_response = response.choices[0].message.content
+        print("Received response from ChatGPT")
+        
+        # Process the response to extract revised transcripts
+        return process_chatgpt_response(assistant_response, transcript_files)
+        
+    except Exception as e:
+        print(f"Quality control request failed: {str(e)}")
+        return False
+
+def process_chatgpt_response(response_content, original_files):
+    """Process ChatGPT response and extract revised transcript files"""
+    try:
+        print("Processing ChatGPT response...")
+        
+        # Create a backup directory for original transcripts
+        backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Backup original files
+        for original_file in original_files:
+            backup_path = os.path.join(backup_dir, original_file['filename'])
+            if not os.path.exists(backup_path):  # Don't overwrite existing backups
+                subprocess.run(['cp', original_file['path'], backup_path])
+                print(f"Backed up {original_file['filename']} to backup directory")
+        
+        # Save the full ChatGPT response for reference
+        response_path = os.path.join(OUTPUT_FOLDER, 'chatgpt_quality_control_response.txt')
+        with open(response_path, 'w', encoding='utf-8') as f:
+            f.write(response_content)
+        print(f"ChatGPT response saved to: {response_path}")
+        
+        # Try to extract revised transcripts from the response
+        extracted_files = extract_transcripts_from_response(response_content, original_files)
+        
+        if extracted_files:
+            print(f"Successfully extracted {len(extracted_files)} revised transcript files")
+            
+            # Replace original files with revised versions
+            for original_file, revised_content in extracted_files.items():
+                original_path = None
+                for orig_file in original_files:
+                    if orig_file['filename'] == original_file:
+                        original_path = orig_file['path']
+                        break
+                
+                if original_path:
+                    # Write the revised content to the original file location
+                    with open(original_path, 'w', encoding='utf-8') as f:
+                        f.write(revised_content)
+                    print(f"Replaced {original_file} with revised version")
+                else:
+                    # Create new file with revised content
+                    new_path = os.path.join(OUTPUT_FOLDER, f"revised_{original_file}")
+                    with open(new_path, 'w', encoding='utf-8') as f:
+                        f.write(revised_content)
+                    print(f"Created new revised file: {new_path}")
+            
+            print("Quality control process completed successfully with automatic file extraction")
+        else:
+            print("Could not automatically extract revised transcripts. Please review the response file manually.")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error processing ChatGPT response: {str(e)}")
+        return False
+
+def extract_transcripts_from_response(response_content, original_files):
+    """Extract individual transcript files from ChatGPT response"""
+    try:
+        extracted_files = {}
+        
+        # Look for common patterns that indicate revised transcript sections
+        patterns = [
+            r"(?i)(?:revised\s+)?(?:transcript\s+)?(?:file\s*:?\s*)([^\n]+\.srt)\s*\n+((?:\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?\n*)+)",
+            r"(?i)(?:file\s*name\s*:?\s*)([^\n]+\.srt)\s*\n+((?:\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?\n*)+)",
+            r"(?i)([^\n/\\]+\.srt)\s*:\s*\n+((?:\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?\n*)+)"
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response_content, re.MULTILINE | re.DOTALL)
+            for filename, content in matches:
+                # Clean up filename
+                filename = filename.strip().replace(':', '').replace('"', '').replace("'", "")
+                if not filename.endswith('.srt'):
+                    filename += '.srt'
+                
+                # Validate that this looks like SRT content
+                if validate_srt_content(content.strip()):
+                    extracted_files[filename] = content.strip()
+                    print(f"Extracted revised transcript for: {filename}")
+        
+        # If no files were extracted using patterns, try to parse the entire response
+        # looking for SRT-like content blocks
+        if not extracted_files:
+            print("No files found with filename patterns, trying to extract SRT blocks...")
+            srt_blocks = re.findall(r'(\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n.+?)(?=\n\d+\n\d{2}:\d{2}:\d{2},\d{3} --> |\Z)', 
+                                  response_content, re.MULTILINE | re.DOTALL)
+            
+            if srt_blocks and len(original_files) == 1:
+                # If we found SRT content and there's only one original file, assume it's a revision
+                original_filename = original_files[0]['filename']
+                combined_content = '\n\n'.join(srt_blocks)
+                if validate_srt_content(combined_content):
+                    extracted_files[original_filename] = combined_content
+                    print(f"Extracted revised transcript content for: {original_filename}")
+        
+        return extracted_files
+        
+    except Exception as e:
+        print(f"Error extracting transcripts from response: {str(e)}")
+        return {}
+
+def validate_srt_content(content):
+    """Validate that content looks like valid SRT format"""
+    try:
+        # Check for basic SRT structure: number, timestamp, text
+        lines = content.strip().split('\n')
+        if len(lines) < 3:
+            return False
+        
+        # Check first few lines for SRT pattern
+        try:
+            int(lines[0])  # First line should be a number
+            if '-->' not in lines[1]:  # Second line should have timestamp
+                return False
+            return True
+        except (ValueError, IndexError):
+            return False
+            
+    except Exception:
+        return False
+
+def trigger_quality_control():
+    """Trigger the quality control process if all transcriptions are complete"""
+    if check_all_transcriptions_complete():
+        print("All transcriptions complete, starting quality control process...")
+        return send_quality_control_request()
+    else:
+        print("Not all transcriptions are complete yet")
+        return False
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
@@ -1007,6 +1254,51 @@ def cleanup_files():
 
     except Exception as e:
         return jsonify({'error': f'Cleanup failed: {str(e)}'}), 500
+
+@app.route('/quality-control/trigger', methods=['POST'])
+def manual_trigger_quality_control():
+    """Manually trigger quality control process"""
+    try:
+        result = trigger_quality_control()
+        if result:
+            return jsonify({
+                'message': 'Quality control process started successfully',
+                'status': 'success'
+            })
+        else:
+            return jsonify({
+                'message': 'Quality control process could not be started. Check if all transcriptions are complete.',
+                'status': 'failed'
+            }), 400
+    
+    except Exception as e:
+        return jsonify({'error': f'Quality control trigger failed: {str(e)}'}), 500
+
+@app.route('/quality-control/status')
+def get_quality_control_status():
+    """Get quality control status"""
+    try:
+        all_complete = check_all_transcriptions_complete()
+        transcript_files = get_all_transcript_files()
+        
+        # Check if quality control has been run
+        qc_response_file = os.path.join(OUTPUT_FOLDER, 'chatgpt_quality_control_response.txt')
+        qc_completed = os.path.exists(qc_response_file)
+        
+        # Check if backup directory exists
+        backup_dir = os.path.join(OUTPUT_FOLDER, 'backup_before_qc')
+        backup_exists = os.path.exists(backup_dir)
+        
+        return jsonify({
+            'all_transcriptions_complete': all_complete,
+            'transcript_files_count': len(transcript_files),
+            'quality_control_completed': qc_completed,
+            'backup_created': backup_exists,
+            'transcript_files': [f['filename'] for f in transcript_files]
+        })
+    
+    except Exception as e:
+        return jsonify({'error': f'Failed to get quality control status: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
